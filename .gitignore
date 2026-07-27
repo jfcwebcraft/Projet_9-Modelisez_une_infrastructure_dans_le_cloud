@@ -1,0 +1,41 @@
+# Dépôt & Archives d'instructions
+Archive/
+Archive/*
+
+# Python & Environnements virtuels
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+ENV/
+env/
+.pytest_cache/
+
+# Data & Exports temporaires
+data/output/*
+!data/output/.gitkeep
+spark-warehouse/
+
+# IDE & Configuration locale
+.vscode/
+.idea/
+.DS_Store
+*.log
+
+# Scripts utilitaires de génération (non destinés au dépôt)
+scripts/generate_architecture_diagram.py
+scripts/prepare_deliverables.py
+
+# Dossier des livrables générés automatiquement
+livrables/
+
+# Fichiers sources Mermaid bruts (intermédiaires de génération)
+docs/exercice1/*.mmd
+
+# Document de travail intermédiaire
+docs/exercice1/evaluation_compatibilite.md
+
+# Fichiers de données de test non structurés
+docs/sample_ticket_enrichi.json
+docs/exemple_execution_pyspark.log
