@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # 1. Cluster Redpanda Single-Node
+  redpanda:
+    image: docker.redpanda.com/redpandadata/redpanda:v23.3.11
+    container_name: redpanda
+    command:
+      - redpanda start
+      - --kafka-addr internal://0.0.0.0:9092,external://0.0.0.0:19092
+      - --advertise-kafka-addr internal://redpanda:9092,external://localhost:19092
+      - --pandaproxy-addr internal://0.0.0.0:8082,external://0.0.0.0:18082
+      - --advertise-pandaproxy-addr internal://redpanda:8082,external://localhost:18082
+      - --schema-registry-addr internal://0.0.0.0:8081,external://0.0.0.0:18081
+      - --mode dev-container
+      - --smp 1
+      - --memory 1G
+    ports:
+      - "18081:18081"
+      - "18082:18082"
+      - "19092:19092"
+      - "9092:9092"
+    volumes:
+      - redpanda_data:/var/lib/redpanda/data
+    healthcheck:
+      test: ["CMD-SHELL", "rpk cluster info"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # 2. Redpanda Console (Interface Web de gestion à http://localhost:8080)
+  redpanda-console:
+    image: docker.redpanda.com/redpandadata/console:v2.4.3
+    container_name: redpanda-console
+    environment:
+      KAFKA_BROKERS: "redpanda:9092"
+      KAFKA_SCHEMAREGISTRY_ENABLED: "true"
+      KAFKA_SCHEMAREGISTRY_URLS: "http://redpanda:8081"
+    ports:
+      - "8080:8080"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+
+  # 3. Producteur Python de tickets clients
+  ticket-producer:
+    build:
+      context: .
+      dockerfile: src/producer/Dockerfile
+    container_name: ticket-producer
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
+      KAFKA_TOPIC: "client_tickets"
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: on-failure
+
+  # 4. Processeur PySpark Streaming
+  spark-processor:
+    build:
+      context: .
+      dockerfile: src/processor/Dockerfile
+    container_name: spark-processor
+    environment:
+      KAFKA_BOOTSTRAP_SERVERS: "redpanda:9092"
+      KAFKA_TOPIC: "client_tickets"
+      OUTPUT_PATH: "/app/data/output/tickets"
+    volumes:
+      - ./data/output:/app/data/output
+    depends_on:
+      redpanda:
+        condition: service_healthy
+    restart: on-failure
+
+volumes:
+  redpanda_data:
+    driver: local
