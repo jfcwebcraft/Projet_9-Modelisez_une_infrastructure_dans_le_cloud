@@ -27,9 +27,6 @@ spark-warehouse/
 scripts/generate_architecture_diagram.py
 scripts/prepare_deliverables.py
 
-# Dossier des livrables générés automatiquement
-livrables/
-
 # Fichiers sources Mermaid bruts (intermédiaires de génération)
 docs/exercice1/*.mmd
 
