@@ -64,4 +64,10 @@ flowchart LR
 
 ## Vidéo de démonstration
 
-Lien : *(à compléter)*
+Lien : https://youtu.be/myv5K0aVnO8
+
+## Portefolio
+
+Portefolio : https://jfc-webcraft.fr
+
+

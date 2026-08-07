@@ -36,3 +36,8 @@ docs/exercice1/evaluation_compatibilite.md
 # Fichiers de données de test non structurés
 docs/sample_ticket_enrichi.json
 docs/exemple_execution_pyspark.log
+
+# Archives et fichiers médias volumineux
+*.zip
+*.mp4
+
