@@ -1,153 +1,92 @@
-# Évaluation de Compatibilité et Choix d'Architecture Cloud Hybride - InduTechData
+# Étude de Compatibilité et Modélisation d'Architecture Cloud Hybride
 
-## Executive Summary
-
-InduTechData fait face à une croissance mensuelle importante de ses données (+50 Go/mois) issues de capteurs IoT et de journaux système, mettant sous pression l'infrastructure *on-premise* existante (Cluster SQL Server 40 To, Baie SAN 10 To, Active Directory). 
-Ce document présente l'évaluation technique et organisationnelle de la solution hybride proposée, combinant l'écosystème cloud **AWS** et la plateforme de streaming temps réel **Redpanda**.
-
----
-
-## Schéma d'Architecture Cloud Hybride (Mermaid)
-
-```mermaid
-graph TB
-    subgraph OnPrem ["DATACENTER ON-PREMISE (InduTechData)"]
-        direction TB
-        IoT["Capteurs IoT & Logs\n(+50 Go / mois)"]
-        Gateway["Passerelle IoT Local\n(Buffer / MQTT / HTTP)"]
-        AD_Local["Active Directory On-Premise\n(Authentification & RBAC)"]
-        SQL_Server[("Cluster SQL Server (40 To)\nERP & CRM")]
-        SAN[("Baie de Stockage SAN (10 To)\nDonnées non structurées")]
-        
-        IoT --> Gateway
-    end
-
-    subgraph HybridConnect ["SÉCURITÉ & CONNECTIVITÉ HYBRIDE"]
-        direction TB
-        VPN["AWS Direct Connect / IPsec VPN\n(Chiffrement TLS 1.3 & AES-256)"]
-        AD_Connector["AWS AD Connector\n(Fédération d'Identités)"]
-        DMS["AWS DMS / Debezium CDC\n(Synchronisation SQL Server)"]
-    end
-
-    subgraph AWSCloud ["ENVIRONNEMENT CLOUD AWS"]
-        direction TB
-        Redpanda["Cluster Redpanda\n(Streaming Temps Réel / API Kafka)"]
-        AWS_AD["AWS Managed Microsoft AD / IAM\n(Contrôle d'Accès Unifié)"]
-        PySpark_Cloud["PySpark Processing\n(Transformations & Agrégations)"]
-        Redshift[("Amazon Redshift\n(Data Warehouse Cloud)")]
-        S3[("Amazon S3 Object Storage\n(Tiered Storage Redpanda & Logs)")]
-
-        Redpanda -->|Traitement Stream| PySpark_Cloud
-        Redpanda -->|Tiered Storage| S3
-        PySpark_Cloud -->|Export Données Clean| S3
-        PySpark_Cloud -->|Indexation Analytique| Redshift
-    end
-
-    %% Flux de données inter-sites
-    Gateway -->|Stream IoT Temps Réel| VPN
-    VPN -->|Port 9092 TLS| Redpanda
-    
-    SQL_Server -->|Replication CDC| DMS
-    DMS -->|Batch / Stream Sync| Redshift
-
-    AD_Local <-->|Trust Relationship| AD_Connector
-    AD_Connector <-->|SSO & Identity Sync| AWS_AD
-
-    %% Styles visuels
-    classDef onPremStyle fill:#F8F9FA,stroke:#495057,stroke-width:2px;
-    classDef hybridStyle fill:#FFF3CD,stroke:#856404,stroke-width:2px;
-    classDef cloudStyle fill:#E3F2FD,stroke:#0D6EFD,stroke-width:2px;
-    classDef storageStyle fill:#FFE69C,stroke:#D63384,stroke-width:2px;
-
-    class OnPrem onPremStyle;
-    class HybridConnect hybridStyle;
-    class AWSCloud cloudStyle;
-    class S3,Redshift,SQL_Server,SAN storageStyle;
-```
+**Projet :** Modernisation du système d'information et ingestion de flux IoT temps réel  
+**Entreprise :** InduTechData  
+**Rédacteur :** Jean-François Chaussoy  
+**Date :** Août 2026  
 
 ---
 
-## 1. Justification des Composants Cloud Sélectionnés
+## 1. Contexte et Enjeux Techniques
 
-### 1.1 Stockage de Données Non Structurées : Amazon S3 (Simple Storage Service)
-* **Description** : Stockage d'objets hautement disponible et résilient.
-* **Justification & Scalabilité** : Amazon S3 offre une durabilité de 99,999999999% (11 nines) et une capacité quasi illimitée. Il permet d'absorber l'augmentation mensuelle de 50 Go sans surdimensionner le matériel local.
-* **Interopérabilité avec Redpanda** : Redpanda intègre nativement le *Tiered Storage* vers Amazon S3. Les données récentes restent en mémoire/NVMe local dans Redpanda, tandis que les données historiques sont automatiquement déchargées vers S3 sous forme de blocs d'objets, optimisant considérablement les coûts.
-* **Sécurité** : Chiffrement automatique au repos (AES-256 via AWS KMS) et politiques d'accès strictes (IAM Bucket Policies).
+InduTechData gère aujourd'hui une infrastructure *on-premise* vieillissante qui arrive à saturation. L'installation de nouveaux capteurs industriels génère une augmentation constante de **50 Go de données par mois**.
 
-### 1.2 Entrepôt de Données (Data Warehouse) : Amazon Redshift
-* **Description** : Entrepôt de données analytique en colonne supportant des requêtes SQL complexes sur plusieurs pétaoctets.
-* **Synchronisation avec SQL Server On-Premise** : 
-  * La synchronisation s'effectue via **AWS Database Migration Service (DMS)** avec capture des changements en temps réel (**CDC - Change Data Capture**), ou via des connecteurs Kafka/Redpanda (**Debezium SQL Server Connector**).
-  * Les données de l'ERP et du CRM hébergées sur le cluster SQL Server *on-premise* sont ainsi répliquées en continu vers Redshift sans impacter les performances de production.
+L'infrastructure actuelle se compose de :
+* **Un cluster SQL Server (40 To)** hébergeant les données critiques des applications métiers (ERP et CRM).
+* **Une baie de stockage SAN (10 To)** dédiée aux fichiers utilisateurs, journaux systèmes et données brutes de capteurs.
+* **Un serveur Active Directory (AD)** assurant l'authentification et la gestion centralisée des droits.
 
-### 1.3 Traitement des Données en Temps Réel : Redpanda
-* **Description** : Plateforme de streaming d'événements compatible avec l'API Apache Kafka, développée en C++.
-* **Justification** :
-  * **Simplicité & Performance** : Redpanda ne nécessite pas de JVM ni de ZooKeeper/KRaft externe, réduisant l'empreinte mémoire et supprimant les pauses dues au Garbage Collector. Il offre des latences p99 extrêmement faibles pour les flux d'ingestion IoT et de logs.
-  * **Efficacité Opérationnelle** : Déploiement ultra-rapide (binaire unique ou conteneur Docker), gestion intégrée du stockage multi-niveaux.
-
-### 1.4 Sécurisation et Gestion des Accès : AWS Managed Microsoft AD & AD Connector
-* **Description** : Service d'annuaire Microsoft Active Directory géré dans AWS.
-* **Gestion Unifiée des Identités** : 
-  * Utilisation d'un **AWS AD Connector** ou d'une relation d'approbation (Trust Relationship) entre l'Active Directory *on-premise* et AWS Managed AD via une connexion réseau sécurisée (IPsec VPN ou AWS Direct Connect).
-  * Garantit l'authentification unique (SSO) et une gestion centralisée des permissions sur l'ensemble de l'infrastructure hybride (fichiers S3, accès Redshift, consoles d'administration).
+L'objectif de cette étude est d'étendre le système d'information vers l'écosystème AWS sans casser l'existant. L'infrastructure hybride proposée permet d'absorber l'ingestion temps réel des données IoT tout en conservant les bases de données SQL Server et l'annuaire Active Directory dans le datacenter d'InduTechData.
 
 ---
 
-## 2. Analyse de Compatibilité avec le SI On-Premise
+## 2. Choix d'Architecture et Services Sélectionnés
 
-### 2.1 Sécurité et Conformité
-* **Protection en Transit** : Tous les flux inter-sites (IoT, réplication de données, accès utilisateurs) transitent via des tunnels VPN IPsec chiffrés en **AES-256** ou via **AWS Direct Connect** avec chiffrement MACsec / TLS 1.3. Les communications avec Redpanda utilisent le protocole **SSL/TLS**.
-* **Protection au Repos** : Chiffrement systématique via **AWS KMS** (Key Management Service) avec rotation automatique des clés.
-* **Gouvernance des Accès** : L'intégration AD-IAM garantit le respect du principe du moindre privilège sur l'ensemble du SI.
+Pour répondre aux contraintes de volumétrie et de débit sans surdimensionner le matériel local, nous avons sélectionné quatre briques principales dans le cloud. *(Note : le schéma visuel global est disponible dans le Livrable 1).*
 
-### 2.2 Interopérabilité et Automatisation
-* **Intégration d'Ingestion** : Les passerelles IoT transmets les métriques aux topics Redpanda via des agents légers (ex: Telegraf, Vector) ou directement en HTTP/Kafka API.
-* **Pipelines ETL/ELT Automatisés** : 
-  * Redpanda transmet les flux en continu vers PySpark pour le nettoyage et l'enrichissement.
-  * PySpark déverse les données structurées dans Amazon Redshift pour l'analyse décisionnelle et dans Amazon S3 pour l'archivage long terme.
+### A. Streaming Temps Réel : Cluster Redpanda
+Plutôt qu'un déploiement Kafka traditionnel nécessitant la gestion d'un cluster ZooKeeper/KRaft et une JVM gourmande en mémoire, nous avons retenu **Redpanda**.
+* Déployé sur des instances EC2 avec stockage local NVMe, Redpanda garantit une latence minime lors de l'ingestion des métriques transmises par les passerelles IoT locales.
+* Sa compatibilité native avec l'API Kafka permet d'utiliser l'écosystème d'outils existant (notamment PySpark pour le traitement de flux) sans modifier la couche de développement.
 
-### 2.3 Scalabilité et Gestion des Coûts
+### B. Stockage Objet Long Terme : Amazon S3
+La baie SAN locale de 10 To ne pouvant pas absorber indéfiniment l'apport des 50 Go mensuels, le stockage d'objets Amazon S3 est utilisé comme niveau d'archivage principal.
+* Redpanda s'appuie sur son mécanisme de *Tiered Storage* pour décharger automatiquement les données anciennes du stockage NVMe vers un compartiment S3.
+* Les fichiers logs et les données brutes sont chiffrés au repos via AWS KMS (chiffrement AES-256).
 
-#### Stratégie de Scalabilité :
-L'architecture hybride sépare le stockage du calcul. Redpanda et PySpark peuvent être dimensionnés dynamiquement (auto-scaling) en fonction des pics d'activité IoT.
+### C. Entrepôt de Données Analytique : Amazon Redshift
+Pour permettre aux équipes métiers d'exécuter des requêtes analytiques complexes sans impacter la production du cluster SQL Server local, nous intégrons **Amazon Redshift**.
+* Les données agrégées par les pipelines de traitement (PySpark) sont déversées dans Redshift pour alimenter les outils décisionnels.
 
-#### Recommandations pour la Surveillance des Coûts :
-1. **AWS Budgets & Cost Explorer** : Configuration d'alertes prédictives en cas de dépassement de budget mensuel.
-2. **AWS CloudWatch** : Supervision en temps réel de l'utilisation des ressources et création de métriques personnalisées.
-3. **Politiques de Rétention S3 Lifecycle** : Transition automatique des objets S3 Standard vers S3 Glacier Instant Retrieval après 90 jours pour réduire la facture de stockage.
-
----
-
-## 3. Estimation des Coûts (Estimatif Initial & Récurrent)
-
-*Remarque : Les estimations ci-dessous sont basées sur le tarificateur AWS Pricing Calculator pour la région Europe (Paris).*
-
-| Composant Cloud | Usage Estimé | Coût Mensuel Estimé (EUR) |
-| :--- | :--- | :--- |
-| **AWS Direct Connect / Site-to-Site VPN** | Tunnels IPsec redondants + transfert | ~100 € |
-| **Amazon S3 (Standard + Lifecycle)** | ~10 To initiaux + 50 Go/mois additionnels | ~240 € |
-| **Redpanda Cluster (Instances EC2 i3en.xlarge)** | 3 nœuds haute disponibilité avec NVMe local | ~850 € |
-| **Amazon Redshift (Serverless / ra3.xlarge)** | Ingestion CDC et requêtes analytiques journalières | ~450 € |
-| **AWS Managed AD / AD Connector** | Annuaire géré hybride | ~150 € |
-| **AWS DMS (Database Migration Service)** | Synchronisation CDC continue SQL Server | ~120 € |
-| **Total Récurrent Mensuel** | | **~1 910 € / mois** |
-
-*Coûts d'intégration initiaux (One-off)* : ~3 500 € (frais de configuration VPN, migration initiale 10 To, audit de sécurité).
+### D. Fédération d'Identités : AWS Managed Microsoft AD & AD Connector
+Pour éviter de dupliquer les comptes utilisateurs et conserver un contrôle d'accès unique :
+* Un **AWS AD Connector** est mis en place pour relier l'Active Directory *on-premise* à l'environnement AWS.
+* Les collaborateurs conservent leurs identifiants habituels (SSO) pour accéder aux ressources cloud (consoles d'administration, requêtes Redshift, compartiments S3).
 
 ---
 
-## 4. Bilan : Avantages, Limitations et Points de Vigilance
+## 3. Compatibilité et Intégration avec le SI On-Premise
 
-### Avantages Majeurs
-* **Performance et Latence** : Redpanda garantit un traitement fluide des flux IoT volumineux sans surcharge sur le SI local.
-* **Souplesse du Stockage** : Élimination du besoin d'investir dans une nouvelle baie SAN *on-premise*.
-* **Continuité d'Utilisation** : Conservation des serveurs ERP/CRM et Active Directory locaux sans perturbation pour les équipes métiers.
+### Sécurité des communications inter-sites
+Toutes les liaisons entre le datacenter InduTechData et la région AWS Europe (Paris) transitent par un **tunnel VPN IPsec redondant** (ou AWS Direct Connect selon l'évolution du trafic). Les flux Redpanda et les API de synchronisation utilisent exclusivement le protocole SSL/TLS (ports 9092 et 443).
 
-### Limitations & Points de Vigilance
-* **Bande Passante Réseau** : Le transfert continu de 50 Go/mois nécessite une ligne réseau stable avec de la bande passante dédiée.
-* **Complexité Observabilité** : Nécessite une supervision unifiée (logs combinés on-premise + cloud).
+### Synchronisation des données métiers (SQL Server vers Cloud)
+Pour alimenter l'entrepôt Redshift à partir des tables SQL Server (ERP/CRM) sans verrouiller les bases de production, nous préconisons la mise en place d'un mécanisme de **Change Data Capture (CDC)** via **AWS Database Migration Service (DMS)**. Seules les modifications récentes sont répliquées au fil de l'eau.
+
+### Automatisation des flux de données
+L'ingestion et les transformations ne nécessitent aucune intervention manuelle. Les passerelles IoT locales envoient leurs métriques aux topics Redpanda, PySpark consomme et enrichit les données en continu, puis déverse les résultats dans S3 et Redshift.
 
 ---
-*Document rédigé dans le cadre du projet d'infrastructures cloud pour InduTechData.*
+
+## 4. Estimation Financière et Détaillée des Coûts
+
+Pour éviter toute mauvaise surprise budgétaire, l'estimation a été calculée sur le tarificateur officiel *AWS Pricing Calculator* (Région Europe Paris - `eu-west-3`).
+
+### A. Coûts Récurrents Mensuels (Environ 1 910 € / mois)
+
+| Composant | Service / Ressource | Hypothèse de Calcul & Dimensionnement | Coût Estimé |
+| :--- | :--- | :--- | :---: |
+| **Streaming** | Cluster Redpanda | 3 instances EC2 `i3en.xlarge` (32 Go RAM, NVMe local) en haute disponibilité | ~850 € / mois |
+| **Data Warehouse** | Amazon Redshift | Mode Serverless / nœuds RA3 pour requêtes analytiques et d'ingestion | ~450 € / mois |
+| **Stockage** | Amazon S3 | ~10 To initiaux + 50 Go/mois (S3 Standard + transition S3 Glacier après 90 jours) | ~240 € / mois |
+| **Identité** | AWS Managed AD | Annuaire géré Standard + AWS AD Connector | ~150 € / mois |
+| **Réplication** | AWS DMS | 1 instance `dms.t3.medium` dédiée au flux CDC SQL Server | ~120 € / mois |
+| **Réseau** | AWS Site-to-Site VPN | Tunnels IPsec redondants + frais de transfert de données | ~100 € / mois |
+| **TOTAL RÉCURRENT** | | | **~1 910 € / mois** |
+
+### B. Coûts d'Intégration Initiaux (Environ 3 500 € - Prestation unique)
+Le budget d'implémentation initiale se décompose comme suit :
+* **5 jours d'ingénierie DevOps / Cloud (TJM moyen 600 €/jour = 3 000 €) :**
+  - Montage et recettes des tunnels VPN IPsec.
+  - Configuration de la relation d'approbation Active Directory et d'AWS AD Connector.
+  - Initialisation de la réplication CDC SQL Server vers Redshift.
+* **Frais de migration initiale de données (~500 €) :**
+  - Transfert initial du volume d'historique de 10 To du SAN local vers Amazon S3.
+
+---
+
+## 5. Points de Vigilance Opérationnels et Recommandations
+
+1. **Capacité de la ligne réseau :** L'envoi continu de 50 Go par mois représente un flux moyen modéré, mais les pics de trafic IoT imposent de maintenir une bande passante montante garantie sur le lien internet du datacenter.
+2. **Surveillance des coûts de sortie (Egress) :** Si les transferts vers le cloud sont peu coûteux, la ré-extraction massive de données depuis S3 vers le réseau local peut générer des frais de bande passante. Il est recommandé de conserver les traitements lourds directement dans l'environnement AWS.
+3. **Pilotage budgétaire :** Définition d'alertes prédictives dans **AWS Budgets** pour notifier l'équipe d'ingénierie dès le franchissement de 80 % de l'enveloppe mensuelle (1 500 €).
